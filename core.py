@@ -11,19 +11,40 @@ import yfinance as yf
 import ta
 from dotenv import load_dotenv
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import json  # <-- added
+import json
 
-from dotenv import load_dotenv
-load_dotenv()  # ensure env vars are loaded before OpenAI init
+# NEW: try to use streamlit secrets if present
+try:
+    import streamlit as st
+except ImportError:
+    st = None
+
+load_dotenv()
 
 try:
     from openai import OpenAI
-    _OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    _OPENAI = OpenAI()
+
+    # priority: env var, then Streamlit secrets, then default
+    _OPENAI_MODEL = (
+        os.getenv("OPENAI_MODEL")
+        or (st.secrets.get("OPENAI_MODEL") if st is not None else None)
+        or "gpt-4o-mini"
+    )
+
+    _OPENAI_API_KEY = (
+        os.getenv("OPENAI_API_KEY")
+        or (st.secrets.get("OPENAI_API_KEY") if st is not None else None)
+    )
+
+    if not _OPENAI_API_KEY:
+        raise RuntimeError("Missing OPENAI_API_KEY")
+
+    _OPENAI = OpenAI(api_key=_OPENAI_API_KEY)
     _HAS_OPENAI = True
 except Exception as e:
     print("⚠️ OpenAI disabled:", e)
     _HAS_OPENAI = False
+
 
 
 # ── hush noisy warnings ───────────────────────────────────
@@ -390,20 +411,7 @@ def load_sp500_tickers()->list[str]:
     "EA","EMR","ETR","EOG","EFX","EQIX","EQR","ESS","EL","EVRG","ES",
     "RE","EXC","EXPE","EXPD","EXR","XOM","FFIV","FAST","FRT","FDX",
     "FIS","FITB","FLS","FMC","F","FTNT","FTV","FBHS","FCX","GPS",
-    "GRMN","IT","GNRC","GD","GE","GIS","GM","GPC","GILD","GL","GPN",
-    "GS","GWW","HAL","HBI","HOG","HIG","HAS","HCA","PEAK","HSIC",
-    "HSY","HES","HPE","HLT","HWM","HOLX","HD","HON","HRL","HST",
-    "HPQ","HUM","HBAN","HII","IEX","IDXX","ITW","ILMN","INCY","IR",
-    "INTC","ICE","IBM","IFF","IP","IPG","IQV","IRM","JKHY","J","JBHT",
-    "SJM","JNJ","JCI","JPM","JNPR","K","KEY","KEYS","KMB","KIM",
-    "KMI","KLAC","KSS","KHC","KR","LHX","LH","LRCX","LVS","LW","L",
-    "LEG","LDOS","LEN","LLY","LNC","LYV","LMT","LULU","MRO","MPC",
-    "MKTX","MAR","MMC","MLM","MAS","MA","MTCH","MKC","MCD","MCK",
-    "MDT","MRK","MET","MTD","MGM","MCHP","MU","MSFT","MDLZ","MPWR",
-    "MNST","MCO","MS","MOS","MSI","MSCI","NDAQ","NOV","NTAP","NFLX",
-    "NWL","NEM","NWSA","NWS","NKE","NI","NSC","NTRS","NOC","NCLH",
-    "NRG","NUE","NVDA","NXPI","ORLY","OXY","ODFL","OMC","OKE","ORCL",
-    "OTIS","PCAR","PKG","PH","PAYX","PAYC","PYPL","PNR","PEP","PFE",
+    "GRMN","IT","GNRC","GD","GE","GIS","GM","PNR","PEP","PFE",
     "PM","PSX","PNC","POOL","PPG","PPL","PFG","PG","PGR","PLD","PRU",
     "PSA","PHM","PVH","QRVO","PWR","QCOM","DGX","RL","RJF","RTX","O",
     "REGN","RMD","RHI","ROK","ROL","ROP","ROST","RCL","SPGI","CRM",
@@ -538,31 +546,46 @@ def decide_owned_action(r: dict, shift_map: dict) -> str:
 
 # ── natural-language explanation helpers ─────────────────
 def plain_explanation(action: str, r: dict, shift_map: dict) -> str:
-    t = r["ticker"]; price = r["ind"]["price"]; rsi = r["ind"]["rsi"]; macd = r["ind"]["macd"]
-    w1, m1, m3 = r["mom"]["w1"], r["mom"]["m1"], r["mom"]["m3"]
-    ns_s, ns_c = r["ns_score"], r["ns_conf"]; tag = r.get("ns_tag") or "—"
-    es_line = r["earn_line"]; forecast = r["forecast"]; alpha = round(alpha_score(r), 3)
-    tech_s = round(technical_score(r), 2)
+    t     = r["ticker"]
+    price = r["ind"]["price"]
+    rsi   = r["ind"]["rsi"]
+    macd  = r["ind"]["macd"]
+    w1    = r["mom"]["w1"]
+    m1    = r["mom"]["m1"]
+    m3    = r["mom"]["m3"]
+    ns_s  = r["ns_score"]
+    ns_c  = r["ns_conf"]
+    tag   = r.get("ns_tag") or "—"
+    es_line  = r["earn_line"]
+    forecast = r["forecast"]
+    alpha    = round(alpha_score(r), 3)
+    tech_s   = round(technical_score(r), 2)
 
     if r["owned"]:
         shift = float(shift_map.get(t, 0.0))
-        dollars_txt = ("trim " + _fmt(-shift)) if action == "SELL" else ("add " + _fmt(shift)) if action == "BUY" else "hold size"
+        if action == "SELL":
+            dollars_txt = f"trim {_fmt(-shift)} from the position"
+        elif action == "BUY":
+            dollars_txt = f"add {_fmt(shift)} to the position"
+        else:
+            dollars_txt = "hold the current position size"
     else:
-        dollars_txt = ("open " + _fmt(r.get("new_amt", 0.0))) if action == "BUY" else "no purchase"
+        if action == "BUY":
+            dollars_txt = f"open a new position of about {_fmt(r.get('new_amt', 0.0))}"
+        else:
+            dollars_txt = "stay out of the name for now"
 
     msg = (
-        f"{t} ~{_fmt(price)}. RSI {int(round(rsi))} / MACD {macd:.2f}. "
-        f"Momentum: 1w {w1:.1f}%, 1m {m1:.1f}%, 3m {m3:.1f}%. "
-        f"News {ns_s:.2f} (conf {ns_c:.2f}, tag {tag}); earnings: {es_line}. "
-        f"Tech score {tech_s}, alpha {alpha:.3f}; model forecast ~{_fmt(forecast)}. "
+        f"{t} is trading around {_fmt(price)}. RSI sits near {int(round(rsi))} and MACD is {macd:.2f}, "
+        f"which together give a technical score of {tech_s:.2f}. Recent momentum is {w1:.1f}% over 1 week, "
+        f"{m1:.1f}% over 1 month, and {m3:.1f}% over 3 months, showing how short–term strength compares with the medium term. "
+        f"Headline sentiment screens at {ns_s:.2f} with confidence {ns_c:.2f} (tag: {tag}), and earnings are summarized as: {es_line}. "
+        f"The model’s blended alpha score is {alpha:.3f} with a rough target level near {_fmt(forecast)}. "
+        f"Given this setup, we plan to {dollars_txt}. The main risk is that momentum and sentiment reverse, "
+        f"which would pressure the trade and could force us to reduce or exit sooner than planned."
     )
-    if action in ("BUY","ADD") and r["ind"]["rsi"] < 75:
-        msg += f"We’ll {dollars_txt} on improving breadth/momentum; key risk is a fade if news flow weakens."
-    elif action in ("SELL","TRIM"):
-        msg += f"We’ll {dollars_txt} given overextension/weak signals; risk is underweighting if trend resumes."
-    else:
-        msg += f"We’ll {dollars_txt} today; signals are mixed."
     return msg
+
 
 def normalize_ticker(t: str) -> str:
     # prefer Yahoo's dash form for class shares, e.g., BRK-B
@@ -575,11 +598,12 @@ def safe_news_ticker(t: str) -> str:
 
 def gpt_explanation(action: str, r: dict, shift_map: dict) -> str:
     """
-    Ask ChatGPT to write a concise, specific rationale.
+    Ask ChatGPT to write a trade rationale.
     Falls back to plain_explanation on any API error or if OpenAI is unavailable.
     """
     if not globals().get("_HAS_OPENAI", False):
         return plain_explanation(action, r, shift_map)
+
     try:
         t = r["ticker"]
         price = r["ind"]["price"]
@@ -599,31 +623,45 @@ def gpt_explanation(action: str, r: dict, shift_map: dict) -> str:
             dollars = float(r.get("new_amt", 0.0)) if action == "BUY" else 0.0
 
         facts = {
-            "ticker": t, "action": action, "price": price,
-            "rsi": rsi, "macd": macd, "momentum_1w_pct": w1,
-            "momentum_1m_pct": m1, "momentum_3m_pct": m3,
-            "news_score": ns_s, "news_conf": ns_c, "news_tag": tag,
-            "earnings_line": es_line, "forecast_price": forecast,
-            "alpha_blend": alpha, "dollars": dollars, "owned": r["owned"]
+            "ticker": t,
+            "action": action,
+            "price": price,
+            "rsi": rsi,
+            "macd": macd,
+            "momentum_1w_pct": w1,
+            "momentum_1m_pct": m1,
+            "momentum_3m_pct": m3,
+            "news_score": ns_s,
+            "news_conf": ns_c,
+            "news_tag": tag,
+            "earnings_line": es_line,
+            "forecast_price": forecast,
+            "alpha_blend": alpha,
+            "dollars": dollars,
+            "owned": r["owned"],
         }
 
         system_msg = (
-            "You are a portfolio PM writing short trade rationales. "
-            "Tone: confident, plain English, specific numbers, 150–200 words."
+            "You are a portfolio PM writing trade rationales. "
+            "Tone: confident, plain English, specific numbers, 120–180 words, no bullets."
         )
         user_msg = (
-            "Write a readable rationale for this trade. Include ticker, price, RSI, MACD, "
+            "Write a clear, readable rationale for this trade. Include ticker, price, RSI, MACD, "
             "1w/1m/3m momentum, news tag+score+confidence, earnings line, forecast price, "
-            "alpha blend, and dollar action; note one risk. Facts:\n" + json.dumps(facts)
+            "alpha blend, and the dollar action. Explain the core thesis and one key risk. "
+            "Facts:\n" + json.dumps(facts)
         )
 
         resp = _OPENAI.chat.completions.create(
             model=_OPENAI_MODEL,
             temperature=0.6,
-            messages=[{"role": "system", "content": system_msg},
-                      {"role": "user", "content": user_msg}],
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
         )
         return resp.choices[0].message.content.strip()
+
     except Exception:
         return plain_explanation(action, r, shift_map)
 
