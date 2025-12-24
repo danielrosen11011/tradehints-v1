@@ -1,0 +1,23 @@
+# Core AI & LangChain
+langchain
+langchain-community
+langchain-openai
+python-dotenv
+pydantic
+
+# Financial & Stock Data (Free, no API key)
+yfinance                # Yahoo Finance API wrapper
+
+# Technical Analysis
+ta                      # Technical analysis indicators
+pandas                  # Data wrangling
+numpy                   # Numerical computing
+
+# Sentiment Analysis (Free NLP tools)
+vaderSentiment          # Rule-based sentiment analysis
+textblob                # Simpler sentiment NLP
+transformers            # Optional: For advanced BERT/GPT sentiment models
+
+# Web Scraping (Free news collection)
+requests
+beautifulsoup4
