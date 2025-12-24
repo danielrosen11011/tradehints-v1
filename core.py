@@ -642,8 +642,9 @@ def gpt_explanation(action: str, r: dict, shift_map: dict) -> str:
         }
 
         system_msg = (
-            "You are a portfolio PM writing trade rationales. "
-            "Tone: confident, plain English, specific numbers, 120–180 words, no bullets."
+            "You are a portfolio manager writing trade rationales for an internal investment memo. "
+            "Tone: precise, confident, concise, no fluff, institutional language. "
+            "Use 2–3 short paragraphs, ~120–160 words total. Avoid repetition."
         )
         user_msg = (
             "Write a clear, readable rationale for this trade. Include ticker, price, RSI, MACD, "
