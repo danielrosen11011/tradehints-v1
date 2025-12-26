@@ -652,75 +652,91 @@ def safe_news_ticker(t: str) -> str:
    return "" if t in delisted else t
 
 def gpt_explanation(action: str, r: dict, shift_map: dict) -> str:
-   """
-   Ask ChatGPT to write a trade rationale.
-   Falls back to plain_explanation on any API error or if OpenAI is unavailable.
-   """
-   if not globals().get("_HAS_OPENAI", False):
-       return plain_explanation(action, r, shift_map)
+    """
+    Ask OpenAI to write a trade rationale in a fixed template.
+    Falls back to plain_explanation on any API error or if OpenAI is unavailable.
+    """
+    if not globals().get("_HAS_OPENAI", False):
+        return plain_explanation(action, r, shift_map)
 
-   try:
-       t = r["ticker"]
-       price = r["ind"]["price"]
-       rsi   = r["ind"]["rsi"]
-       macd  = r["ind"]["macd"]
-       w1, m1, m3 = r["mom"]["w1"], r["mom"]["m1"], r["mom"]["m3"]
-       ns_s, ns_c = r["ns_score"], r["ns_conf"]
-       tag        = r.get("ns_tag") or "—"
-       es_line    = r["earn_line"]
-       forecast   = r["forecast"]
-       alpha      = round(alpha_score(r), 3)
+    try:
+        t = r["ticker"]
+        price = float(r["ind"]["price"])
+        rsi   = float(r["ind"]["rsi"])
+        macd  = float(r["ind"]["macd"])
+        w1, m1, m3 = float(r["mom"]["w1"]), float(r["mom"]["m1"]), float(r["mom"]["m3"])
+        ns_s, ns_c = float(r["ns_score"]), float(r["ns_conf"])
+        tag        = r.get("ns_tag") or "—"
+        es_line    = r["earn_line"]
+        forecast   = float(r["forecast"])
+        alpha      = float(round(alpha_score(r), 3))
 
-       if r["owned"]:
-           shift = float(shift_map.get(t, 0.0))
-           dollars = (-shift) if action == "SELL" else (shift if action == "BUY" else 0.0)
-       else:
-           dollars = float(r.get("new_amt", 0.0)) if action == "BUY" else 0.0
+        if r["owned"]:
+            shift = float(shift_map.get(t, 0.0))
+            dollars = (-shift) if action == "SELL" else (shift if action == "BUY" else 0.0)
+        else:
+            dollars = float(r.get("new_amt", 0.0)) if action == "BUY" else 0.0
 
-       facts = {
-           "ticker": t,
-           "action": action,
-           "price": price,
-           "rsi": rsi,
-           "macd": macd,
-           "momentum_1w_pct": w1,
-           "momentum_1m_pct": m1,
-           "momentum_3m_pct": m3,
-           "news_score": ns_s,
-           "news_conf": ns_c,
-           "news_tag": tag,
-           "earnings_line": es_line,
-           "forecast_price": forecast,
-           "alpha_blend": alpha,
-           "dollars": dollars,
-           "owned": r["owned"],
-       }
+        facts = {
+            "ticker": t,
+            "action": action,
+            "price": price,
+            "rsi": rsi,
+            "macd": macd,
+            "momentum_1w_pct": w1,
+            "momentum_1m_pct": m1,
+            "momentum_3m_pct": m3,
+            "news_score": ns_s,
+            "news_conf": ns_c,
+            "news_tag": tag,
+            "earnings_line": es_line,
+            "forecast_price": forecast,
+            "alpha_blend": alpha,
+            "dollars": dollars,
+            "owned": r["owned"],
+        }
 
-       system_msg = (
-           "You are a portfolio manager writing trade rationales for an internal investment memo. "
-           "Tone: precise, confident, concise, no fluff, institutional language. "
-           "Use 2–3 short paragraphs, ~120–160 words total. Avoid repetition."
-       )
+        system_msg = (
+            "You are a portfolio manager writing trade rationales for an internal investment memo. "
+            "Tone: precise, confident, concise, institutional. No fluff."
+        )
 
-       user_msg = (
-           "Write a clear, readable rationale for this trade. Include ticker, price, RSI, MACD, "
-           "1w/1m/3m momentum, news tag+score+confidence, earnings line, forecast price, "
-           "alpha blend, and the dollar action. Explain the core thesis and one key risk. "
-           "Facts:\n" + json.dumps(facts)
-       )
+        # Force a consistent template for every stock
+        user_msg = (
+            "Using ONLY the numeric facts and strings provided below, write a trade rationale "
+            "in EXACTLY this structure:\n\n"
+            "Ticker: {ticker}\n"
+            "Action: {action}\n"
+            "Price: ${price:.2f}\n"
+            "RSI: {rsi:.2f}\n"
+            "MACD: {macd:.2f}\n"
+            "Momentum: 1W {momentum_1w_pct:.2f}%, "
+            "1M {momentum_1m_pct:.2f}%, "
+            "3M {momentum_3m_pct:.2f}%\n"
+            "News: score {news_score:.3f}, conf {news_conf:.2f}, tag {news_tag}\n"
+            "Earnings: {earnings_line}\n"
+            "Forecast price: ${forecast_price:.2f}\n"
+            "Alpha blend: {alpha_blend:.3f}\n"
+            "Dollar move: ${dollars:.2f}\n\n"
+            "Thesis: <2–4 sentences explaining why this trade makes sense given these numbers.>\n"
+            "Risk: <1–3 sentences on the main risk to the thesis.>\n\n"
+            "Do NOT add extra sections or headings. Fill in the placeholders using the facts. "
+            "Do not invent numbers; reuse the given ones.\n\n"
+            f"Facts JSON:\n{json.dumps(facts)}"
+        )
 
-       resp = _OPENAI.chat.completions.create(
-           model=_OPENAI_MODEL,
-           temperature=0.6,
-           messages=[
-               {"role": "system", "content": system_msg},
-               {"role": "user", "content": user_msg},
-           ],
-       )
-       return resp.choices[0].message.content.strip()
+        resp = _OPENAI.chat.completions.create(
+            model=_OPENAI_MODEL,
+            temperature=0.5,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+        )
+        return resp.choices[0].message.content.strip()
 
-   except Exception:
-       return plain_explanation(action, r, shift_map)
+    except Exception:
+        return plain_explanation(action, r, shift_map)
 
 # ── MAIN ─────────────────────────────────────────────────
 def run_tradehints(prefs: dict) -> dict:
